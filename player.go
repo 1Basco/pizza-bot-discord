@@ -21,13 +21,15 @@ type Track struct {
 
 // GuildPlayer manages the queue and playback state for a single guild.
 type GuildPlayer struct {
-	mu          sync.Mutex
-	queue       []Track
-	current     *Track
-	loop        bool
-	vc          *discordgo.VoiceConnection
-	running     bool
-	cancelTrack context.CancelFunc
+	mu            sync.Mutex
+	queue         []Track
+	current       *Track
+	loop          bool
+	vc            *discordgo.VoiceConnection
+	running       bool
+	cancelTrack   context.CancelFunc
+	guildID       string // set at creation, read-only after
+	currentSpanID string // per-track span ID for PizzaLog latency
 }
 
 var (
@@ -41,7 +43,7 @@ func getOrCreatePlayer(guildID string) *GuildPlayer {
 	if p, ok := players[guildID]; ok {
 		return p
 	}
-	p := &GuildPlayer{}
+	p := &GuildPlayer{guildID: guildID}
 	players[guildID] = p
 	return p
 }
@@ -56,6 +58,7 @@ func (p *GuildPlayer) playLoop() {
 			vc := p.vc
 			p.vc = nil
 			p.mu.Unlock()
+			Log("INFO", "Queue empty, disconnecting", map[string]string{"guild": p.guildID})
 			if vc != nil {
 				vc.Disconnect(context.Background())
 			}
@@ -64,9 +67,15 @@ func (p *GuildPlayer) playLoop() {
 		track := p.queue[0]
 		p.queue = p.queue[1:]
 		p.current = &track
+		spanID := NewSpanID()
+		p.currentSpanID = spanID
 		p.mu.Unlock()
 
+		LogTrace("INFO", "Track started", map[string]string{"title": track.Title, "guild": p.guildID}, "", spanID, "")
+
 		skipped := p.playTrack(track)
+
+		LogTrace("INFO", "Track finished", map[string]string{"title": track.Title, "guild": p.guildID, "skipped": fmt.Sprintf("%v", skipped)}, "", spanID, "")
 
 		// If the track ended naturally and loop is on, push it back to the front.
 		if !skipped {
@@ -119,6 +128,7 @@ func (p *GuildPlayer) playTrack(track Track) (skipped bool) {
 	dlpOut, err := dlp.StdoutPipe()
 	if err != nil {
 		log.Println("yt-dlp pipe error:", err)
+		Log("ERROR", "yt-dlp pipe error", map[string]string{"error": err.Error(), "title": track.Title})
 		return false
 	}
 
@@ -127,15 +137,18 @@ func (p *GuildPlayer) playTrack(track Track) (skipped bool) {
 	ffmOut, err := ffm.StdoutPipe()
 	if err != nil {
 		log.Println("ffmpeg pipe error:", err)
+		Log("ERROR", "ffmpeg pipe error", map[string]string{"error": err.Error(), "title": track.Title})
 		return false
 	}
 
 	if err := dlp.Start(); err != nil {
 		log.Println("yt-dlp start error:", err)
+		Log("ERROR", "yt-dlp start error", map[string]string{"error": err.Error(), "title": track.Title})
 		return false
 	}
 	if err := ffm.Start(); err != nil {
 		log.Println("ffmpeg start error:", err)
+		Log("ERROR", "ffmpeg start error", map[string]string{"error": err.Error(), "title": track.Title})
 		dlp.Process.Kill()
 		return false
 	}
@@ -145,10 +158,12 @@ func (p *GuildPlayer) playTrack(track Track) (skipped bool) {
 	// Skip the two Ogg/Opus header packets (ID header + comment header).
 	if _, err := ogg.nextPacket(); err != nil {
 		log.Println("ogg header read error:", err)
+		Log("ERROR", "ogg header read error", map[string]string{"error": err.Error(), "title": track.Title})
 		return false
 	}
 	if _, err := ogg.nextPacket(); err != nil {
 		log.Println("ogg comment read error:", err)
+		Log("ERROR", "ogg comment read error", map[string]string{"error": err.Error(), "title": track.Title})
 		return false
 	}
 

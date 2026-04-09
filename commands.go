@@ -126,6 +126,7 @@ func handlePlay(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		p.mu.Lock()
 		p.vc = vc
 		p.mu.Unlock()
+		Log("INFO", "Joined voice channel", map[string]string{"guild": i.GuildID, "channel": vs.ChannelID})
 	}
 
 	track := Track{Title: query, Query: query}
@@ -139,6 +140,7 @@ func handlePlay(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	p.mu.Unlock()
 
 	editReply(s, i, fmt.Sprintf("Queued: **%s**", query))
+	Log("INFO", "Track queued", map[string]string{"title": query, "guild": i.GuildID})
 }
 
 func handleLoop(s *discordgo.Session, i *discordgo.InteractionCreate) {
@@ -153,6 +155,7 @@ func handleLoop(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	} else {
 		respond(s, i, "Loop **disabled**.")
 	}
+	Log("INFO", "Loop toggled", map[string]string{"guild": i.GuildID, "loop": fmt.Sprintf("%v", loopOn)})
 }
 
 func handleNext(s *discordgo.Session, i *discordgo.InteractionCreate) {
@@ -166,6 +169,7 @@ func handleNext(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		return
 	}
 	cancel()
+	Log("INFO", "Track skipped", map[string]string{"guild": i.GuildID})
 	respond(s, i, "Skipped.")
 }
 
@@ -204,5 +208,6 @@ func handleStop(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	if cancel != nil {
 		cancel()
 	}
+	Log("INFO", "Stop command issued", map[string]string{"guild": i.GuildID})
 	respond(s, i, "Stopped and cleared the queue.")
 }

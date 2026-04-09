@@ -12,6 +12,7 @@ import (
 
 func main() {
 	_ = godotenv.Load()
+	initLogger()
 
 	token := os.Getenv("DISCORD_TOKEN")
 	appID := os.Getenv("DISCORD_APP_ID")
@@ -36,14 +37,19 @@ func main() {
 	}
 	defer sess.Close()
 
+	go startWebServer()
+	Log("INFO", "Bot starting", nil)
+
 	log.Println("Registering slash commands...")
 	if err := registerCommands(sess, appID, guildID); err != nil {
 		log.Fatalf("error registering commands: %v", err)
 	}
 
+	Log("INFO", "Bot ready", nil)
 	log.Println("Bot is running. Press CTRL+C to exit.")
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 	<-sc
+	Log("INFO", "Bot shutting down", nil)
 	log.Println("Shutting down...")
 }
