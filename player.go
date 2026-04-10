@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -104,16 +105,21 @@ func (p *GuildPlayer) playTrack(track Track) (skipped bool) {
 	}
 
 	// yt-dlp extracts the best audio and writes raw bytes to stdout.
+	// tv_embedded+mweb avoids both the SABR 403s from the default web client
+	// and the GVS PO Token requirement that ios/android now enforce.
 	dlp := exec.CommandContext(ctx, "yt-dlp",
-		"--no-playlist", "-x", "-q",
+		"--no-playlist", "-x",
 		"-f", "bestaudio/best",
+		"--extractor-args", "youtube:player_client=tv_embedded,mweb",
 		"-o", "-",
 		query,
 	)
+	var dlpStderr bytes.Buffer
+	dlp.Stderr = &dlpStderr
 
 	// ffmpeg re-encodes to Ogg-wrapped Opus at 48kHz stereo with 20ms frames.
 	ffm := exec.CommandContext(ctx, "ffmpeg",
-		"-hide_banner", "-loglevel", "quiet",
+		"-hide_banner", "-loglevel", "error",
 		"-i", "pipe:0",
 		"-vn",
 		"-c:a", "libopus",
@@ -124,6 +130,8 @@ func (p *GuildPlayer) playTrack(track Track) (skipped bool) {
 		"-f", "ogg",
 		"pipe:1",
 	)
+	var ffmStderr bytes.Buffer
+	ffm.Stderr = &ffmStderr
 
 	dlpOut, err := dlp.StdoutPipe()
 	if err != nil {
@@ -157,8 +165,10 @@ func (p *GuildPlayer) playTrack(track Track) (skipped bool) {
 
 	// Skip the two Ogg/Opus header packets (ID header + comment header).
 	if _, err := ogg.nextPacket(); err != nil {
-		log.Println("ogg header read error:", err)
-		Log("ERROR", "ogg header read error", map[string]string{"error": err.Error(), "title": track.Title})
+		dlpErr := strings.TrimSpace(dlpStderr.String())
+		ffmErr := strings.TrimSpace(ffmStderr.String())
+		log.Printf("ogg header read error: %v | yt-dlp: %s | ffmpeg: %s", err, dlpErr, ffmErr)
+		Log("ERROR", "ogg header read error", map[string]string{"error": err.Error(), "title": track.Title, "yt-dlp": dlpErr, "ffmpeg": ffmErr})
 		return false
 	}
 	if _, err := ogg.nextPacket(); err != nil {
