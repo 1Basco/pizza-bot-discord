@@ -130,14 +130,20 @@ func handlePlay(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	}
 
 	track := Track{Title: query, Query: query}
+	if strings.HasPrefix(query, "http://") || strings.HasPrefix(query, "https://") {
+		track.URL = query
+	}
 
 	p.mu.Lock()
 	p.queue = append(p.queue, track)
+	queueIdx := len(p.queue) - 1
 	if !p.running {
 		p.running = true
 		go p.playLoop()
 	}
 	p.mu.Unlock()
+
+	go resolveTrackMeta(p, queueIdx, query)
 
 	editReply(s, i, fmt.Sprintf("Queued: **%s**", query))
 	Log("INFO", "Track queued", map[string]string{"title": query, "guild": i.GuildID})

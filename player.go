@@ -14,10 +14,11 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
-// Track holds the user-supplied query and a display title.
+// Track holds the user-supplied query, a display title, and the resolved YouTube URL.
 type Track struct {
-	Title string
-	Query string
+	Title string // Resolved YouTube title; falls back to Query until resolved
+	Query string // Original user search query or URL
+	URL   string // Resolved YouTube watch URL (empty until resolveTrackMeta completes)
 }
 
 // GuildPlayer manages the queue and playback state for a single guild.
@@ -37,6 +38,41 @@ var (
 	playersMu sync.Mutex
 	players   = make(map[string]*GuildPlayer)
 )
+
+// resolveTrackMeta runs yt-dlp in the background to fetch the real title and watch URL
+// for the track at queue index idx. If the track has moved (was dequeued) by the time
+// resolution finishes, the update is a no-op.
+func resolveTrackMeta(p *GuildPlayer, idx int, query string) {
+	ytQuery := query
+	if !strings.HasPrefix(ytQuery, "http://") && !strings.HasPrefix(ytQuery, "https://") {
+		ytQuery = "ytsearch1:" + ytQuery
+	}
+	out, err := exec.Command("yt-dlp",
+		"--no-playlist", "--skip-download",
+		"--print", "title",
+		"--print", "webpage_url",
+		"--extractor-args", "youtube:player_client=tv_embedded,mweb",
+		ytQuery,
+	).Output()
+	if err != nil {
+		return
+	}
+	lines := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)
+	if len(lines) < 2 {
+		return
+	}
+	title := strings.TrimSpace(lines[0])
+	url := strings.TrimSpace(lines[1])
+	if title == "" || url == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if idx < len(p.queue) && p.queue[idx].Query == query {
+		p.queue[idx].Title = title
+		p.queue[idx].URL = url
+	}
+}
 
 func getOrCreatePlayer(guildID string) *GuildPlayer {
 	playersMu.Lock()
