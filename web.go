@@ -27,6 +27,8 @@ func startWebServer() {
 	http.HandleFunc("/api/play", handleAPIPlay)
 	http.HandleFunc("/api/loop", handleAPILoop)
 	http.HandleFunc("/api/reorder", handleAPIReorder)
+	http.HandleFunc("/api/resolve", handleAPIResolve)
+	http.HandleFunc("/api/play-playlist", handleAPIPlayPlaylist)
 	http.HandleFunc("/", handleWebIndex)
 	log.Println("Web status server listening on http://localhost:3000")
 	if err := http.ListenAndServe(":3000", nil); err != nil {
@@ -213,6 +215,108 @@ func handleAPIReorder(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, `{"ok":true}`)
 }
 
+func handleAPIResolve(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Query string `json:"query"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Query) == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":"invalid request"}`)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if !isPlaylistURL(req.Query) {
+		fmt.Fprint(w, `{"playlist":false}`)
+		return
+	}
+
+	title, entries, err := fetchPlaylistEntries(req.Query, 50)
+	if err != nil || len(entries) == 0 {
+		fmt.Fprint(w, `{"playlist":false}`)
+		return
+	}
+
+	type respEntry struct {
+		Title string `json:"title"`
+		URL   string `json:"url"`
+	}
+	resp := struct {
+		Playlist bool        `json:"playlist"`
+		Title    string      `json:"title"`
+		Count    int         `json:"count"`
+		Tracks   []respEntry `json:"tracks"`
+	}{
+		Playlist: true,
+		Title:    title,
+		Count:    len(entries),
+	}
+	for _, e := range entries {
+		resp.Tracks = append(resp.Tracks, respEntry{Title: e.Title, URL: e.URL})
+	}
+	json.NewEncoder(w).Encode(resp)
+}
+
+func handleAPIPlayPlaylist(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		GuildID string `json:"guildId"`
+		Tracks  []struct {
+			Title string `json:"title"`
+			URL   string `json:"url"`
+		} `json:"tracks"`
+		Mode string `json:"mode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.GuildID == "" || len(req.Tracks) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":"invalid request"}`)
+		return
+	}
+
+	playersMu.Lock()
+	p, ok := players[req.GuildID]
+	playersMu.Unlock()
+
+	if !ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"error":"guild not found"}`)
+		return
+	}
+
+	playlist := make([]Track, 0, len(req.Tracks))
+	for _, t := range req.Tracks {
+		playlist = append(playlist, Track{Title: t.Title, Query: t.URL, URL: t.URL})
+	}
+
+	p.mu.Lock()
+	p.queue = applyPlaylistMode(p.queue, playlist, req.Mode)
+	shouldStart := !p.running && p.vc != nil
+	if shouldStart {
+		p.running = true
+	}
+	p.mu.Unlock()
+
+	if shouldStart {
+		go p.playLoop()
+	}
+
+	Log("INFO", "Playlist queued via web", map[string]string{
+		"guild": req.GuildID, "count": fmt.Sprintf("%d", len(playlist)), "mode": req.Mode,
+	})
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprint(w, `{"ok":true}`)
+}
+
 func handleWebIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprint(w, `<!DOCTYPE html>
@@ -261,6 +365,21 @@ func handleWebIndex(w http.ResponseWriter, r *http.Request) {
   .refresh { color: #555; font-size: 1rem; margin-bottom: 1.5rem; }
   #no-guilds { color: #555; font-style: italic; }
   #search-msg { font-size: 1rem; color: #4ade80; margin-top: 0.3rem; display: none; }
+  /* Playlist modal */
+  .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 100; align-items: center; justify-content: center; }
+  .modal-backdrop.open { display: flex; }
+  .modal { background: #1e1e1e; border: 1px solid #444; border-radius: 8px; padding: 1.5rem; max-width: 480px; width: 90%; max-height: 80vh; display: flex; flex-direction: column; gap: 1rem; }
+  .modal h2 { color: #f97316; font-size: 1rem; }
+  .modal-meta { color: #888; font-size: 1rem; }
+  .modal-tracks { flex: 1; overflow-y: auto; border: 1px solid #333; border-radius: 4px; padding: 0.5rem; }
+  .modal-tracks li { color: #aaa; font-size: 1rem; padding: 3px 0; list-style: decimal inside; }
+  .modal-tracks li span { color: #555; font-size: 1rem; }
+  .modal-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+  .modal-actions button { flex: 1; padding: 0.6rem 0.5rem; border: none; border-radius: 4px; font-family: monospace; font-size: 1rem; font-weight: bold; cursor: pointer; }
+  .btn-append   { background: #3b82f6; color: #fff; }
+  .btn-alternate { background: #8b5cf6; color: #fff; }
+  .btn-distribute { background: #10b981; color: #fff; }
+  .btn-cancel   { background: #333; color: #aaa; flex: 0 0 auto; }
 </style>
 </head>
 <body>
@@ -273,6 +392,21 @@ func handleWebIndex(w http.ResponseWriter, r *http.Request) {
 </div>
 <div id="search-msg"></div>
 
+<!-- Playlist modal -->
+<div class="modal-backdrop" id="playlist-modal">
+  <div class="modal">
+    <h2 id="modal-title">Playlist detectada</h2>
+    <div class="modal-meta" id="modal-meta"></div>
+    <ol class="modal-tracks" id="modal-tracks"></ol>
+    <div class="modal-actions">
+      <button class="btn-append"    onclick="submitPlaylist('append')">No fim</button>
+      <button class="btn-alternate" onclick="submitPlaylist('alternate')">Intercalar</button>
+      <button class="btn-distribute" onclick="submitPlaylist('distribute')">Distribuir</button>
+      <button class="btn-cancel"    onclick="closeModal()">Cancelar</button>
+    </div>
+  </div>
+</div>
+
 <div class="refresh" id="last-refresh">refreshing every 3s...</div>
 <div id="status"></div>
 
@@ -280,6 +414,7 @@ func handleWebIndex(w http.ResponseWriter, r *http.Request) {
 let lastStatus = [];
 let dragSrcIdx = null;
 let dragGuild = null;
+let pendingPlaylist = null; // {tracks, guildId} waiting for mode choice
 
 function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -407,29 +542,88 @@ function addToQueue() {
 
   const btn = document.getElementById('search-btn');
   btn.disabled = true;
-  fetch('/api/play', {
+
+  // First check if this is a playlist URL.
+  fetch('/api/resolve', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({guildId, query})
+    body: JSON.stringify({query})
   })
   .then(r => r.json())
   .then(d => {
-    btn.disabled = false;
-    if (d.ok) {
-      document.getElementById('search-input').value = '';
-      msg.style.display = 'block';
-      msg.style.color = '#4ade80';
-      msg.textContent = 'Queued: ' + query;
-      setTimeout(() => { msg.style.display = 'none'; }, 3000);
-      refresh();
-    } else {
-      msg.style.display = 'block';
-      msg.style.color = '#f87171';
-      msg.textContent = 'Error: ' + (d.error || 'unknown');
-      setTimeout(() => { msg.style.display = 'none'; }, 4000);
+    if (d.playlist) {
+      btn.disabled = false;
+      showPlaylistModal(guildId, d);
+      return;
     }
+    // Not a playlist — queue normally.
+    return fetch('/api/play', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({guildId, query})
+    })
+    .then(r => r.json())
+    .then(d2 => {
+      btn.disabled = false;
+      if (d2.ok) {
+        document.getElementById('search-input').value = '';
+        msg.style.display = 'block';
+        msg.style.color = '#4ade80';
+        msg.textContent = 'Queued: ' + query;
+        setTimeout(() => { msg.style.display = 'none'; }, 3000);
+        refresh();
+      } else {
+        msg.style.display = 'block';
+        msg.style.color = '#f87171';
+        msg.textContent = 'Error: ' + (d2.error || 'unknown');
+        setTimeout(() => { msg.style.display = 'none'; }, 4000);
+      }
+    });
   })
   .catch(() => { btn.disabled = false; });
+}
+
+function showPlaylistModal(guildId, data) {
+  pendingPlaylist = {guildId, tracks: data.tracks};
+  document.getElementById('modal-title').textContent = data.title || 'Playlist';
+  document.getElementById('modal-meta').textContent =
+    data.count + ' faixas' + (data.count === 50 ? ' (primeiras 50)' : '');
+  const ol = document.getElementById('modal-tracks');
+  const preview = data.tracks.slice(0, 10);
+  ol.innerHTML = preview.map(t =>
+    '<li>' + esc(t.title) + (data.tracks.length > 10 && t === preview[preview.length-1]
+      ? ' <span>... e mais ' + (data.count - 10) + '</span>' : '') + '</li>'
+  ).join('');
+  document.getElementById('playlist-modal').classList.add('open');
+}
+
+function closeModal() {
+  document.getElementById('playlist-modal').classList.remove('open');
+  pendingPlaylist = null;
+}
+
+function submitPlaylist(mode) {
+  if (!pendingPlaylist) return;
+  const {guildId, tracks} = pendingPlaylist;
+  closeModal();
+  fetch('/api/play-playlist', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({guildId, tracks, mode})
+  })
+  .then(r => r.json())
+  .then(d => {
+    if (d.ok) {
+      document.getElementById('search-input').value = '';
+      const msg = document.getElementById('search-msg');
+      msg.style.display = 'block';
+      msg.style.color = '#4ade80';
+      msg.textContent = 'Playlist adicionada (' + mode + ')';
+      setTimeout(() => { msg.style.display = 'none'; }, 3000);
+      refresh();
+    }
+  })
+  .catch(() => {});
 }
 
 function toggleLoop(guildId) {
