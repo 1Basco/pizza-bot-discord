@@ -223,44 +223,44 @@ func handleWebIndex(w http.ResponseWriter, r *http.Request) {
 <title>pizza-bot queue</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: #1a1a1a; color: #e0e0e0; font-family: monospace; padding: 2rem; }
+  body { background: #1a1a1a; color: #e0e0e0; font-family: monospace; padding: 2rem; font-size: 1rem; }
   h1 { color: #f97316; margin-bottom: 1.5rem; font-size: 1.4rem; }
   .search-bar { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
-  .search-bar select { background: #252525; color: #e0e0e0; border: 1px solid #444; border-radius: 4px; padding: 0.4rem 0.6rem; font-family: monospace; font-size: 0.85rem; }
-  .search-bar input { flex: 1; min-width: 200px; background: #252525; color: #e0e0e0; border: 1px solid #444; border-radius: 4px; padding: 0.4rem 0.7rem; font-family: monospace; font-size: 0.85rem; outline: none; }
+  .search-bar select { background: #252525; color: #e0e0e0; border: 1px solid #444; border-radius: 4px; padding: 0.4rem 0.6rem; font-family: monospace; font-size: 1rem; }
+  .search-bar input { flex: 1; min-width: 200px; background: #252525; color: #e0e0e0; border: 1px solid #444; border-radius: 4px; padding: 0.4rem 0.7rem; font-family: monospace; font-size: 1rem; outline: none; }
   .search-bar input:focus { border-color: #f97316; }
-  .search-bar button { background: #f97316; color: #1a1a1a; border: none; border-radius: 4px; padding: 0.4rem 1rem; font-family: monospace; font-size: 0.85rem; cursor: pointer; font-weight: bold; }
+  .search-bar button { background: #f97316; color: #1a1a1a; border: none; border-radius: 4px; padding: 0.4rem 1rem; font-family: monospace; font-size: 1rem; cursor: pointer; font-weight: bold; }
   .search-bar button:hover { background: #ea6a00; }
   .search-bar button:disabled { background: #555; color: #888; cursor: default; }
   .guild { background: #252525; border: 1px solid #333; border-radius: 6px; padding: 1.2rem; margin-bottom: 1rem; }
   .guild-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.8rem; }
-  .guild-id { color: #888; font-size: 0.75rem; }
+  .guild-id { color: #888; font-size: 1rem; }
   .now-playing { color: #4ade80; font-size: 1rem; margin-bottom: 0.6rem; }
   .now-playing span { color: #e0e0e0; }
-  .track-link { color: #60a5fa; text-decoration: none; font-size: 0.75rem; margin-left: 6px; }
+  .track-link { color: #60a5fa; text-decoration: none; font-size: 1rem; margin-left: 6px; }
   .track-link:hover { text-decoration: underline; }
-  .track-query { color: #666; font-size: 0.75rem; margin-left: 4px; }
-  .badge { display: inline-block; font-size: 0.7rem; padding: 1px 6px; border-radius: 3px; margin-left: 6px; }
+  .track-query { color: #666; font-size: 1rem; margin-left: 4px; }
+  .badge { display: inline-block; font-size: 1rem; padding: 1px 6px; border-radius: 3px; margin-left: 6px; }
   .loop-on { background: #f97316; color: #1a1a1a; }
   .loop-off { background: #333; color: #888; }
-  .loop-btn { background: none; border: 1px solid #444; border-radius: 4px; color: #aaa; font-family: monospace; font-size: 0.7rem; padding: 2px 8px; cursor: pointer; }
+  .loop-btn { background: none; border: 1px solid #444; border-radius: 4px; color: #aaa; font-family: monospace; font-size: 1rem; padding: 4px 10px; cursor: pointer; }
   .loop-btn:hover { border-color: #f97316; color: #f97316; }
   .queue-list { margin-top: 0.6rem; list-style: none; counter-reset: queue-counter; }
   .queue-item { display: flex; align-items: flex-start; gap: 0.5rem; padding: 4px 2px; border-radius: 3px; cursor: grab; counter-increment: queue-counter; border: 1px solid transparent; }
-  .queue-item::before { content: counter(queue-counter) "."; color: #555; min-width: 1.4rem; text-align: right; padding-top: 1px; flex-shrink: 0; font-size: 0.85rem; }
+  .queue-item::before { content: counter(queue-counter) "."; color: #555; min-width: 1.4rem; text-align: right; padding-top: 1px; flex-shrink: 0; font-size: 1rem; }
   .queue-item.drag-over { border-color: #f97316; background: #2e2009; }
   .queue-item.dragging { opacity: 0.4; }
-  .drag-handle { color: #444; cursor: grab; user-select: none; padding-top: 1px; font-size: 0.85rem; }
+  .drag-handle { color: #444; cursor: grab; user-select: none; padding-top: 1px; font-size: 1rem; }
   .track-info { flex: 1; }
-  .track-title { color: #aaa; font-size: 0.85rem; }
+  .track-title { color: #aaa; font-size: 1rem; }
   .track-meta { display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; margin-top: 1px; }
   .empty { color: #555; font-style: italic; }
   .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
   .dot-on { background: #4ade80; }
   .dot-off { background: #555; }
-  .refresh { color: #555; font-size: 0.7rem; margin-bottom: 1.5rem; }
+  .refresh { color: #555; font-size: 1rem; margin-bottom: 1.5rem; }
   #no-guilds { color: #555; font-style: italic; }
-  #search-msg { font-size: 0.75rem; color: #4ade80; margin-top: 0.3rem; display: none; }
+  #search-msg { font-size: 1rem; color: #4ade80; margin-top: 0.3rem; display: none; }
 </style>
 </head>
 <body>

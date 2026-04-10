@@ -30,8 +30,9 @@ type GuildPlayer struct {
 	vc            *discordgo.VoiceConnection
 	running       bool
 	cancelTrack   context.CancelFunc
-	guildID       string // set at creation, read-only after
-	currentSpanID string // per-track span ID for PizzaLog latency
+	guildID       string            // set at creation, read-only after
+	currentSpanID string            // per-track span ID for PizzaLog latency
+	frameCache    map[string][][]byte // key=Query; Opus frames cached for looped tracks
 }
 
 var (
@@ -71,6 +72,10 @@ func resolveTrackMeta(p *GuildPlayer, idx int, query string) {
 	if idx < len(p.queue) && p.queue[idx].Query == query {
 		p.queue[idx].Title = title
 		p.queue[idx].URL = url
+	} else if p.current != nil && p.current.Query == query {
+		// Track was already dequeued and is now playing — update current directly.
+		p.current.Title = title
+		p.current.URL = url
 	}
 }
 
@@ -92,6 +97,7 @@ func (p *GuildPlayer) playLoop() {
 		if len(p.queue) == 0 {
 			p.current = nil
 			p.running = false
+			p.frameCache = nil
 			vc := p.vc
 			p.vc = nil
 			p.mu.Unlock()
@@ -125,9 +131,49 @@ func (p *GuildPlayer) playLoop() {
 	}
 }
 
+// playCached sends pre-buffered Opus frames directly to Discord, bypassing yt-dlp/ffmpeg.
+// Returns true if skipped, false if played to completion.
+func (p *GuildPlayer) playCached(track Track, frames [][]byte) (skipped bool) {
+	ctx, cancel := context.WithCancel(context.Background())
+	p.mu.Lock()
+	p.cancelTrack = cancel
+	vc := p.vc
+	p.mu.Unlock()
+	defer cancel()
+
+	if vc == nil {
+		return false
+	}
+
+	Log("INFO", "Playing from cache", map[string]string{"title": track.Title, "guild": p.guildID})
+	vc.Speaking(true)           //nolint:errcheck
+	defer vc.Speaking(false)    //nolint:errcheck
+
+	for _, frame := range frames {
+		select {
+		case <-ctx.Done():
+			return true
+		case vc.OpusSend <- frame:
+		}
+	}
+	return false
+}
+
 // playTrack streams one track through the yt-dlp → ffmpeg → Ogg → Discord pipeline.
+// If the track is cached (from a previous loop iteration), playCached is used instead.
 // Returns true if the track was skipped (context cancelled), false if it ended naturally.
 func (p *GuildPlayer) playTrack(track Track) (skipped bool) {
+	// Use cached frames if available (populated on previous loop iteration).
+	p.mu.Lock()
+	cacheKey := track.Query
+	cachedFrames, hasCached := p.frameCache[cacheKey]
+	shouldCache := p.loop && !hasCached
+	p.mu.Unlock()
+
+	if hasCached {
+		return p.playCached(track, cachedFrames)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	p.mu.Lock()
 	p.cancelTrack = cancel
@@ -264,6 +310,8 @@ bufferWait:
 	defer vc.Speaking(false)    //nolint:errcheck
 
 	// Drain the buffer channel into Discord's Opus sender.
+	// If shouldCache is set, accumulate frames so the next loop iteration skips yt-dlp.
+	var savedFrames [][]byte
 	for {
 		select {
 		case <-ctx.Done():
@@ -276,7 +324,21 @@ bufferWait:
 				// Reader finished and buffer is exhausted — track ended naturally.
 				dlp.Wait() //nolint:errcheck
 				ffm.Wait() //nolint:errcheck
+				if shouldCache {
+					p.mu.Lock()
+					if p.frameCache == nil {
+						p.frameCache = make(map[string][][]byte)
+					}
+					p.frameCache[cacheKey] = savedFrames
+					p.mu.Unlock()
+					Log("INFO", "Track cached for loop", map[string]string{"title": track.Title, "guild": p.guildID})
+				}
 				return false
+			}
+			if shouldCache {
+				saved := make([]byte, len(frame))
+				copy(saved, frame)
+				savedFrames = append(savedFrames, saved)
 			}
 			select {
 			case vc.OpusSend <- frame:

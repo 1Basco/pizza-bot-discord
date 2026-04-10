@@ -208,6 +208,7 @@ func handleStop(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	p.mu.Lock()
 	p.queue = nil
 	p.loop = false
+	p.frameCache = nil
 	cancel := p.cancelTrack
 	p.mu.Unlock()
 
