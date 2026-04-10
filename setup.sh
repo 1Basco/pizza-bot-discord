@@ -8,8 +8,7 @@ echo "Installing ffmpeg..."
 apk add --no-cache ffmpeg
 
 echo "Installing yt-dlp..."
-apk add --no-cache python3 py3-pip
-pip3 install --break-system-packages -q yt-dlp
+apk add --no-cache yt-dlp
 
 echo "Done. Verify with:"
 echo "  ffmpeg -version"
